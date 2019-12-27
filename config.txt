@@ -1,7 +1,7 @@
-use_camera_or_video 0
-save_video 0
+use_camera_or_video 1
+save_video 1
 mssd_v4l2_dev /dev/video8
-fps_sleep 20000
+fps_sleep 0
 mssd_video_knn_in /home/firefly/cap_data/vid/2019-11-19-16-51-15-741.avi
 mssd_video_knn_out /home/firefly/cap_data/out/2019-11-19-16-51-15-741.avi
 //上面的地址作为mt_ssd_syj视频保存地址

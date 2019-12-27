@@ -13,7 +13,11 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <unistd.h>
+#include <signal.h>
 
+#include "src/config.h"
+#include "src/v4l2/v4l2.h"  
+#include "src/screen/screen.h"
 #include "rknn_api.h"
 #include "opencv2/core/core.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
@@ -26,7 +30,7 @@
 using namespace std;
 using namespace cv;
 
-
+#define MAX_QUEUE_SIZE 20
 int idxInputImage = 0;  // image index of input video
 int idxShowImage = 0;   // next frame index to be display
 bool bReading = true;   // flag of input
@@ -39,7 +43,18 @@ public:
         return n1.first > n2.first;
     }
 };
+cv::VideoCapture capture;
+VideoWriter outputVideo;
+V4L2 v4l2_;
+CONFIG config;
+unsigned int * pfb;
+SCREEN screen_;
+int IMG_WID;
+int IMG_HGT;
+cv::Mat frame;
+bool use_video_not_camera,save_video,quit;
 
+mutex mtxQuit; 
 mutex mtxQueueInput;               // mutex of input queue
 mutex mtxQueueShow;                // mutex of display queue
 queue<pair<int, Mat>> queueInput;  // input queue
@@ -92,6 +107,14 @@ typedef struct detection{
     float objectness;
     int sort_class;
 } detection;
+
+void my_handler(int s)
+{
+		mtxQuit.lock();
+        quit=true;
+		mtxQuit.unlock();
+        LOGD("Caught signal  %d  quit= %d",s,quit);
+}
 
 void free_detections(detection *dets, int n)
 {
@@ -403,6 +426,14 @@ void run_process(int thread_id)
 
 	while (true)
 	{
+		mtxQuit.lock();
+		if(quit)
+		{
+			mtxQuit.unlock();
+			break;
+		}
+		mtxQuit.unlock();
+
 		double start_time,end_time;
 
 		pair<int, Mat> pairIndexImage;
@@ -480,7 +511,7 @@ void run_process(int thread_id)
 	}
 }
 
-void cameraRead(int index) 
+void cameraRead() 
 {
 	int i = 0;
   	int initialization_finished = 1;
@@ -495,11 +526,11 @@ void cameraRead(int index)
 
   	printf("Bind CameraCapture process to CPU %d\n", cpuid); 
 
-  	VideoCapture camera(index);
-  	if (!camera.isOpened()) {
-  		cerr << "Open camera error!" << endl;
-  		exit(-1);
-  	}
+  	// VideoCapture camera(index);
+  	// if (!camera.isOpened()) {
+  	// 	cerr << "Open camera error!" << endl;
+  	// 	exit(-1);
+  	// }
 
   	while (true) {
     		initialization_finished = 1;
@@ -516,32 +547,43 @@ void cameraRead(int index)
     		sleep(1);
   	}
 
-        while (true) {
-                // read function
-                usleep(1000);
-                Mat img;
-                camera >> img;
-                if (img.empty()) {
-                        cerr << "Fail to read image from camera!" << endl;
-                        break;
-                }
+	while (true) {
+		mtxQuit.lock();
+		if(quit)
+		{
+			mtxQuit.unlock();
+			break;
+		}
+		mtxQuit.unlock();
+		
+		mtxQueueInput.lock();
+		if (queueInput.size() <= MAX_QUEUE_SIZE)
+		{
+		usleep(1000);
+		v4l2_.read_frame(frame);
+		if (frame.empty()) {
+			cerr << "Fail to read image from camera!" << endl;
+			break;
+		}
+		queueInput.push(make_pair(idxInputImage++, frame));
+		mtxQueueInput.unlock();
 
-                mtxQueueInput.lock();
-                queueInput.push(make_pair(idxInputImage++, img));
-                if (queueInput.size() >= 30) {
-                        mtxQueueInput.unlock();
-                        cout << "[Warning]input queue size is " << queueInput.size() << endl;
-                        sleep(1);
-                } else {
-                        mtxQueueInput.unlock();
-                }
+		}
+		else
+		{
+			mtxQueueInput.unlock();
+		}
+				
 		if (bReading) {
 			continue;
 		} else {
-			camera.release();
+			// camera.release();
+			v4l2_.stop_capturing();
+			v4l2_.uninit_device();
+			v4l2_.close_device();
 			break;
 		}
-  	}
+	}
 }
 
 void videoRead(const char *video_name) 
@@ -562,6 +604,9 @@ void videoRead(const char *video_name)
 	VideoCapture video;
 	if (!video.open(video_name)) {
 		cout << "Fail to open " << video_name << endl;
+		mtxQuit.lock();
+		quit = true;
+		mtxQuit.unlock();
 		return;
 	}
 
@@ -583,25 +628,32 @@ void videoRead(const char *video_name)
 
 	while (true) 
 	{  
+		mtxQuit.lock();
+		if(quit)
+		{
+			mtxQuit.unlock();
+			break;
+		}
+		mtxQuit.unlock();
 		usleep(1000);
 		Mat img;
 
 		if (queueInput.size() < 30) {
 			if (!video.read(img)) {
-				cout << "read video stream failed! try replay!" << endl;
-				video.set(CV_CAP_PROP_POS_FRAMES, 0);
-				continue;
+				cout << "read video stream failed! or end!" << endl;
+				mtxQuit.lock();
+				quit = true;
+				mtxQuit.unlock();
+				//video.set(CV_CAP_PROP_POS_FRAMES, 0);
+				break;
 			}
+			if(img.size().width!=IMG_WID || img.size().height!=IMG_HGT)
+				cv::resize(img, img, cv::Size(IMG_WID, IMG_HGT), (0, 0), (0, 0), cv::INTER_LINEAR);
 			mtxQueueInput.lock();
 			queueInput.push(make_pair(idxInputImage++, img));
 			mtxQueueInput.unlock();
-
-			if (frame_cnt > 0 && idxInputImage >= frame_cnt) {
-				video.set(CV_CAP_PROP_POS_FRAMES, 0);
-				continue;
-			} else {
-				usleep(10);
-			}
+			usleep(10);
+			
 		}
 		if (bReading) {
 			continue;
@@ -630,6 +682,13 @@ void displayImage()
 	first_time=what_time_is_it_now();
 	while (true) 
 	{
+		mtxQuit.lock();
+		if(quit)
+		{
+			mtxQuit.unlock();
+			break;
+		}
+		mtxQuit.unlock();
 		mtxQueueShow.lock();
         	if (queueShow.empty()) {
 			mtxQueueShow.unlock();
@@ -639,16 +698,23 @@ void displayImage()
             		string a = to_string(fps) + "FPS";
             		cv::putText(img, a, cv::Point(15, 15), 1, 1, cv::Scalar{0, 0, 255},2);
 
-            		cv::imshow("RK3399Pro", img);  // display image
+					v4l2_. mat_to_argb(img.data,pfb,img.size().width,img.size().height,screen_.vinfo.xres_virtual,0,0);
+					memcpy(screen_.pfb,pfb,screen_.finfo.smem_len);
+					if(save_video)
+					{
+						outputVideo.write(img);
+					}
+
+            		// cv::imshow("RK3399Pro", img);  // display image
             		idxShowImage++;
             		queueShow.pop();
             		mtxQueueShow.unlock();
 
-            		if (waitKey(1) == 27) {
-				cv::destroyAllWindows();
-				bReading = false;
-				break;
-            		}
+            	// 	if (waitKey(1) == 27) {
+				// cv::destroyAllWindows();
+				// bReading = false;
+				// break;
+            	// 	}
 			last_time=what_time_is_it_now();
 			//cout<<"all use time: "<<(last_time - first_time)<<"\n";
 			fps = (int)1/(last_time - first_time);
@@ -658,43 +724,83 @@ void displayImage()
         	}
 
     	}
+		if(save_video)
+        	outputVideo.release();
 }
 
 int main(const int argc, const char** argv) 
 {
+	quit = false;
+	IMG_HGT = 480;
+    IMG_WID = 640;
+  	std::string in_video_file;
+    std::string out_video_file;
+    config.get_param_mssd_video_knn(in_video_file,out_video_file);
+    LOGD("save  video:   %s",out_video_file.c_str());
+    std::string dev_num;
+    config.get_param_mms_V4L2(dev_num);
+    LOGD("open  %s",dev_num.c_str());
+    config.get_use_camera_or_video(use_video_not_camera);
+    LOGD("use_video_not_camera  %d",use_video_not_camera);
+    config.get_save_video(save_video);
+    LOGD("save_video  %d",save_video);
+
+    frame.create(IMG_HGT,IMG_WID,CV_8UC3);
+    frame = Mat::zeros(IMG_HGT,IMG_WID,CV_8UC3);
+
+	struct sigaction sigIntHandler;
+	sigIntHandler.sa_handler = my_handler;
+	sigemptyset(&sigIntHandler.sa_mask);
+	sigIntHandler.sa_flags = 0;
+	sigaction(SIGINT, &sigIntHandler, NULL);
+
+    screen_.init((char *)"/dev/fb0",640,480);
+    pfb = (unsigned int *)malloc(screen_.finfo.smem_len);
+
+	if(use_video_not_camera)
+    {
+        capture.open(in_video_file.c_str());
+        capture.set(CV_CAP_PROP_FOURCC, cv::VideoWriter::fourcc ('M', 'J', 'P', 'G'));
+    }
+    else
+    {
+        v4l2_.init(dev_num.c_str(),640,480);
+        v4l2_.open_device();
+        v4l2_.init_device();
+        v4l2_.start_capturing();
+    }
+
+    if(save_video)
+    {
+        Size sWH = Size( IMG_WID,IMG_HGT);
+        outputVideo.open(out_video_file.c_str(), CV_FOURCC('M', 'J', 'P', 'G'), 25, sWH,true);
+        if(!outputVideo.isOpened())
+            LOGD("save video failed!");
+    }
+
 	int i, cpus = 0;
 	int camera_index;
 	cpu_set_t mask;
 	cpu_set_t get;
 	array<thread, 4> threads;
 
-	if (argc != 3) {
-		cout << "Usage of this exec: ./yolov3-416 c camera_index" << endl;
-		cout << "                    ./yolov3-416 v video_name" << endl;
-		return -1;
-	}
-
 	cpus = sysconf(_SC_NPROCESSORS_CONF);
 	printf("This system has %d processor(s).\n", cpus);
 
-	string mode = argv[1];
-	if (mode == "c") {
-		camera_index = atoi(argv[2]);
-		threads = {thread(cameraRead, camera_index),
-                                thread(displayImage),
-                                thread(run_process, 0),
-                                thread(run_process, 1)};
-	} else if (mode == "v") {
-		threads = {thread(videoRead, argv[2]),
+	if (!use_video_not_camera) {
+		threads = {thread(cameraRead),
                                 thread(displayImage),
                                 thread(run_process, 0),
                                 thread(run_process, 1)};
 	} else {
-		return -1;
-	}
+		threads = {thread(videoRead, in_video_file.c_str()),
+                                thread(displayImage),
+                                thread(run_process, 0),
+                                thread(run_process, 1)};
+	} 
 
 	for (int i = 0; i < 4; i++)
 		threads[i].join();
-
+	LOGD("quit successed!");
 	return 0;
 }

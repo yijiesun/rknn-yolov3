@@ -2,7 +2,7 @@
 using namespace std;
 CONFIG::CONFIG()
 {
-	config_file = "config.txt";
+	config_file = "../config.txt";
 	if ((file_open = fopen(config_file.c_str(), "r")) == NULL) {
 	puts("Fail to open config.txt!");
 	exit(0);
