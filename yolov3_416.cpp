@@ -183,7 +183,8 @@ void get_network_boxes(float *predictions, int netw,int neth,int GRID,int* masks
 			dets[count].objectness=objectness;
 			dets[count].classes=nclasses;
 			dets[count].bbox=get_yolo_box(predictions,anchors,masks[n],box_index,col,row,lw,lh,netw,neth,lw*lh);
-			for(int j=0;j<nclasses;j++){
+			// for(int j=0;j<nclasses;j++){
+			for(int j=0;j<1;j++){
 				int class_index=box_index+(5+j)*lw*lh;
 				float prob=objectness*predictions[class_index];
 				dets[count].prob[j]=prob;
@@ -308,12 +309,14 @@ int draw_image(cv::Mat img,detection* dets,int total,float thresh)
 					topclass=j;
 				}
 				if(class_<0){
-					strcat(labelstr,labels[j].data());
+					sprintf(labelstr,"%d",int(dets[i].prob[j]*100+0.5));
+					// strcat(labelstr,labels[j].data());
 					class_=j;
 				}
 				else{
 					strcat(labelstr,",");
-					strcat(labelstr,labels[j].data());
+					sprintf(labelstr,"%d",int(dets[i].prob[j]*100+0.5));
+					// strcat(labelstr,labels[j].data());
 				}
 				//printf("%s: %.02f%%\n",labels[j].data(),dets[i].prob[j]*100);
 			}
@@ -329,11 +332,12 @@ int draw_image(cv::Mat img,detection* dets,int total,float thresh)
             if(x1  < 0) x1  = 0;
             if(x2> img.cols-1) x2 = img.cols-1;
             if(y1 < 0) y1 = 0;
-            if(x2 > img.rows-1) x2 = img.rows-1;
+			if(y2 > img.rows-1) y2 = img.rows-1;
 			//std::cout << labels[topclass] << "\t@ (" << x1 << ", " << y1 << ") (" << x2 << ", " << y2 << ")" << "\n";
 
-            rectangle(img, Point(x1, y1), Point(x2, y2), colorArray[class_%10], 3);
-            putText(img, labelstr, Point(x1, y1 - 12), 1, 2, Scalar(0, 255, 0, 255));
+            // rectangle(img, Point(x1, y1), Point(x2, y2), colorArray[class_%10], 3);
+			rectangle(img, Point(x1, y1), Point(x2, y2), Scalar(0, 0, 255, 255), 2);
+            putText(img, labelstr, Point(x1, y1 - 12), 1, 1, Scalar(0, 255, 0, 255));
             }
 		}
 	return 0;
@@ -489,7 +493,8 @@ void run_process(int thread_id)
 		for(int i = 0; i < nboxes_total; ++i)
 			dets[i].objectness = 0;
 		
-		outputs_transform(outputs, net_width, net_height, dets);
+		outputs_transform(outputs, IMG_WID, IMG_HGT, dets);
+		// outputs_transform(outputs, net_width, net_height, dets);
 		end_time=what_time_is_it_now();
 		//cout<<"outputs_transform use time: "<<(end_time - start_time)<<"\n";
 
@@ -500,6 +505,10 @@ void run_process(int thread_id)
 	
 		start_time = what_time_is_it_now();
 		draw_image(pairIndexImage.second, dets, nboxes_left, DRAW_CLASS_THRESH);
+		// resimg = Mat::zeros(cv::Size(net_width, net_height),CV_8UC3);
+		// draw_image(resimg, dets, nboxes_left, DRAW_CLASS_THRESH);
+		// cv::resize(resimg, resimg, cv::Size(IMG_WID, IMG_HGT), (0, 0), (0, 0), cv::INTER_LINEAR);
+		// resimg.copyTo(pairIndexImage.second);
 		end_time=what_time_is_it_now();
 		//cout<<"draw_image use time: "<<(end_time - start_time)<<"\n";
 
