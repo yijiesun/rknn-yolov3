@@ -183,8 +183,8 @@ void get_network_boxes(float *predictions, int netw,int neth,int GRID,int* masks
 			dets[count].objectness=objectness;
 			dets[count].classes=nclasses;
 			dets[count].bbox=get_yolo_box(predictions,anchors,masks[n],box_index,col,row,lw,lh,netw,neth,lw*lh);
-			// for(int j=0;j<nclasses;j++){
-			for(int j=0;j<1;j++){
+			for(int j=0;j<nclasses;j++){
+			//for(int j=0;j<1;j++){
 				int class_index=box_index+(5+j)*lw*lh;
 				float prob=objectness*predictions[class_index];
 				dets[count].prob[j]=prob;
